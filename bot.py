@@ -2,6 +2,7 @@ import re
 import os
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 
 # ===========================
 # YOUR INFO
@@ -9,7 +10,7 @@ from telethon import TelegramClient, events
 
 load_dotenv()
 
-api_id = os.getenv("API_ID")
+api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 
 CHANNEL = "freelance_ethio"
@@ -57,7 +58,7 @@ BLOCKED_KEYWORDS = [
 
 ]
 
-client = TelegramClient("session", api_id, api_hash)
+client = TelegramClient(StringSession(os.getenv("SESSION")), api_id, api_hash)
 
 
 def looks_like_job(text):
