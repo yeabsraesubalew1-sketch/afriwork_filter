@@ -21,8 +21,8 @@ python bot.py
 
 ## Files
 
-- bot.py — main bot script
-- requirements.txt — Python dependencies
+- bot.py - main bot script
+- requirements.txt - Python dependencies
 
 ## License
 
