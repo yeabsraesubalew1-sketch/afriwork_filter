@@ -1,7 +1,12 @@
+import asyncio
 import os
 import re
+import shutil
+import subprocess
+import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from dotenv import load_dotenv
@@ -44,6 +49,61 @@ def get_required_env(name):
     if value:
         return value
     return None
+
+
+def play_pig_sound():
+    try:
+        if os.name == "nt":
+            import winsound
+
+            winsound.Beep(1200, 180)
+            time.sleep(0.05)
+            winsound.Beep(900, 140)
+            time.sleep(0.05)
+            winsound.Beep(1500, 220)
+        else:
+            print("\a")
+            print("oink oink")
+    except Exception as exc:
+        print(f"Sound alert failed: {exc}")
+
+
+def show_desktop_notification(title, body):
+    if os.getenv("DISABLE_NOTIFICATIONS") == "1":
+        return
+
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["osascript", "-e", f'display notification "{body}" with title "{title}"'], check=False)
+            return
+
+        if os.name == "nt":
+            import tkinter as tk
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            root.after(3000, root.destroy)
+            tk.messagebox.showinfo(title, body)
+            root.mainloop()
+            return
+
+        if shutil.which("notify-send"):
+            subprocess.run(["notify-send", title, body], check=False)
+            return
+
+        print(f"Desktop notification unavailable: {title} - {body}")
+    except Exception as exc:
+        print(f"Desktop notification failed: {exc}")
+
+
+def alert_match(title, job_type):
+    play_pig_sound()
+    threading.Thread(
+        target=show_desktop_notification,
+        args=("New matching job", f"{title}\nType: {job_type}"),
+        daemon=True,
+    ).start()
 
 
 api_id_value = get_required_env("API_ID")
@@ -107,6 +167,8 @@ BLOCKED_KEYWORDS = [
 ]
 
 client = TelegramClient(StringSession(session_string), api_id, api_hash)
+processed_message_ids = set()
+last_seen_time = datetime.now(timezone.utc) - timedelta(minutes=30)
 
 
 def normalize_text(text):
@@ -161,9 +223,13 @@ def wanted(job_type):
     return False
 
 
-@client.on(events.NewMessage(chats=CHANNEL, incoming=True))
-async def handler(event):
-    text = event.raw_text or event.message.message or ""
+async def process_message(message):
+    global last_seen_time
+
+    if message.id in processed_message_ids:
+        return
+
+    text = message.message or ""
 
     if not looks_like_job(text):
         return
@@ -181,10 +247,11 @@ async def handler(event):
         return
 
     print(f"Matched -> {title} ({job_type})")
+    alert_match(title, job_type)
 
     try:
         me = await client.get_me()
-        await client.forward_messages(me, event.message)
+        await client.forward_messages(me, message)
         print("Forwarded to Saved Messages")
     except Exception as exc:
         print(f"Forward failed: {exc}")
@@ -193,7 +260,55 @@ async def handler(event):
         except Exception as fallback_exc:
             print(f"Fallback send failed: {fallback_exc}")
 
+    processed_message_ids.add(message.id)
+    if message.date:
+        last_seen_time = max(last_seen_time, message.date.astimezone(timezone.utc))
+
+
+async def catch_up_missed_messages():
+    global last_seen_time
+
+    if not client.is_connected():
+        return
+
+    try:
+        messages = await client.get_messages(CHANNEL, limit=200, offset_date=last_seen_time)
+    except Exception as exc:
+        print(f"Catch-up scan failed: {exc}")
+        return
+
+    if not messages:
+        return
+
+    for message in reversed(messages):
+        if message.id in processed_message_ids:
+            continue
+        if message.date and message.date < last_seen_time:
+            continue
+        await process_message(message)
+
+
+async def connection_watchdog():
+    was_connected = False
+
+    while True:
+        await asyncio.sleep(15)
+        connected = client.is_connected()
+
+        if connected and not was_connected:
+            print("Connection restored; checking recent messages")
+            await catch_up_missed_messages()
+            was_connected = True
+        elif not connected:
+            was_connected = False
+
+
+@client.on(events.NewMessage(chats=CHANNEL, incoming=True))
+async def handler(event):
+    await process_message(event.message)
+
 
 print("Running... waiting for new messages")
 client.start()
+client.loop.create_task(connection_watchdog())
 client.run_until_disconnected()
