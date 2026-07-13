@@ -79,12 +79,13 @@ def show_desktop_notification(title, body):
 
         if os.name == "nt":
             import tkinter as tk
+            from tkinter import messagebox
 
             root = tk.Tk()
             root.withdraw()
             root.attributes("-topmost", True)
             root.after(3000, root.destroy)
-            tk.messagebox.showinfo(title, body)
+            messagebox.showinfo(title, body)
             root.mainloop()
             return
 
